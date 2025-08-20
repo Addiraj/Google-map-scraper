@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+pydantic
+selenium
+webdriver-manager
+lxml
+psycopg2-binary
+python-dotenv

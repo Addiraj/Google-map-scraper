@@ -1,81 +1,82 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, BackgroundTasks
 from pydantic import BaseModel
-from typing import Optional, List, Dict
-import uvicorn
-from scraper import AdvancedContactExtractor
+from typing import Optional, List
+import json
+from datetime import datetime
+from your_scraper_file import AdvancedContactExtractor  # Import your scraper class
 
-app = FastAPI(
-    title="Google Maps Business Scraper",
-    description="Advanced Google Maps business data extraction API"
-)
+app = FastAPI(title="Google Maps Business Scraper API")
 
-class ScrapingRequest(BaseModel):
+class SearchRequest(BaseModel):
     search_query: str
     max_results: Optional[int] = 20
     visit_websites: Optional[bool] = True
 
-class ScrapingResponse(BaseModel):
-    status: str
-    message: str
-    duration: Optional[str]
-    extracted_count: int
-    contacts_found: int
-    results: List[Dict]
+class BusinessData(BaseModel):
+    business_name: str
+    address: Optional[str]
+    phone_no: Optional[str]
+    website: Optional[str]
+    rating: Optional[float]
+    review_count: Optional[int]
+    category: Optional[str]
+    primary_email: Optional[str]
+    secondary_email: Optional[str]
+    additional_contacts: Optional[dict]
 
 @app.get("/")
-def read_root():
-    return {
-        "status": "online",
-        "service": "Google Maps Business Scraper",
-        "endpoints": {
-            "POST /scrape": "Extract business data from Google Maps"
-        }
-    }
+async def root():
+    return {"status": "active", "message": "Google Maps Business Scraper API is running"}
 
-@app.post("/scrape", response_model=ScrapingResponse)
-def scrape_businesses(request: ScrapingRequest):
+@app.post("/scrape", response_model=List[BusinessData])
+async def scrape_businesses(request: SearchRequest, background_tasks: BackgroundTasks):
     try:
-        # Initialize the scraper with user parameters
+        # Initialize scraper
         scraper = AdvancedContactExtractor(
             search_query=request.search_query,
             max_results=request.max_results,
             visit_websites=request.visit_websites
         )
 
-        # Run the extraction
+        # Start scraping
         results = []
 
-        # Override the save_business_data method to collect results
-        def collect_data(data):
-            if data:
-                results.append(data)
-                return True
-            return False
+        # Search Google Maps
+        if not scraper.search_google_maps():
+            return {"error": "Failed to search Google Maps"}
 
-        # Store original method
-        original_save = scraper.save_business_data
-        scraper.save_business_data = collect_data
+        # Get business links
+        business_links = scraper.get_business_links_advanced()
+        if not business_links:
+            return {"error": "No businesses found"}
 
-        # Run extraction
-        success = scraper.run_extraction()
+        # Extract data for each business
+        for link in business_links:
+            business_data = scraper.extract_business_contacts(link)
+            if business_data:
+                # Convert the data to match the BusinessData model
+                formatted_data = {
+                    "business_name": business_data.get("business_name", ""),
+                    "address": business_data.get("address"),
+                    "phone_no": business_data.get("phone_no"),
+                    "website": business_data.get("website"),
+                    "rating": business_data.get("rating"),
+                    "review_count": business_data.get("review_count"),
+                    "category": business_data.get("category"),
+                    "primary_email": business_data.get("primary_email"),
+                    "secondary_email": business_data.get("secondary_email"),
+                    "additional_contacts": json.loads(business_data.get("additional_contacts", "{}"))
+                }
+                results.append(formatted_data)
 
-        # Restore original method
-        scraper.save_business_data = original_save
-
-        if not success:
-            raise HTTPException(status_code=500, detail="Extraction failed")
-
-        return {
-            "status": "success",
-            "message": f"Successfully extracted {len(results)} businesses",
-            "duration": str(scraper.duration) if hasattr(scraper, 'duration') else None,
-            "extracted_count": scraper.extracted_count,
-            "contacts_found": scraper.contacts_found,
-            "results": results
-        }
+        return results
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        return {"error": str(e)}
+    finally:
+        if 'scraper' in locals():
+            scraper.cleanup()
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)

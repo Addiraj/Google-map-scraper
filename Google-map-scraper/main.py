@@ -3,7 +3,7 @@ from pydantic import BaseModel
 from typing import Optional, List
 import json
 from datetime import datetime
-from your_scraper_file import AdvancedContactExtractor  # Import your scraper class
+from scraper import AdvancedContactExtractor
 
 app = FastAPI(title="Google Maps Business Scraper API")
 
@@ -28,8 +28,8 @@ class BusinessData(BaseModel):
 async def root():
     return {"status": "active", "message": "Google Maps Business Scraper API is running"}
 
-@app.post("/scrape", response_model=List[BusinessData])
-async def scrape_businesses(request: SearchRequest, background_tasks: BackgroundTasks):
+@app.post("/scrape")
+async def scrape_businesses(request: SearchRequest):
     try:
         # Initialize scraper
         scraper = AdvancedContactExtractor(
@@ -38,23 +38,13 @@ async def scrape_businesses(request: SearchRequest, background_tasks: Background
             visit_websites=request.visit_websites
         )
 
-        # Start scraping
-        results = []
+        # Run extraction
+        results = scraper.run_extraction()
 
-        # Search Google Maps
-        if not scraper.search_google_maps():
-            return {"error": "Failed to search Google Maps"}
-
-        # Get business links
-        business_links = scraper.get_business_links_advanced()
-        if not business_links:
-            return {"error": "No businesses found"}
-
-        # Extract data for each business
-        for link in business_links:
-            business_data = scraper.extract_business_contacts(link)
+        # Format results
+        formatted_results = []
+        for business_data in results:
             if business_data:
-                # Convert the data to match the BusinessData model
                 formatted_data = {
                     "business_name": business_data.get("business_name", ""),
                     "address": business_data.get("address"),
@@ -67,16 +57,9 @@ async def scrape_businesses(request: SearchRequest, background_tasks: Background
                     "secondary_email": business_data.get("secondary_email"),
                     "additional_contacts": json.loads(business_data.get("additional_contacts", "{}"))
                 }
-                results.append(formatted_data)
+                formatted_results.append(formatted_data)
 
-        return results
+        return formatted_results
 
     except Exception as e:
         return {"error": str(e)}
-    finally:
-        if 'scraper' in locals():
-            scraper.cleanup()
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)

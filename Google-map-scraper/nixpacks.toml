@@ -1,16 +1,15 @@
-# Python provider with Chrome setup
-providers = ["python"]
+[phases.setup]
+nixPkgs = ["chromium", "chromedriver"]
 
-# Setup phase - install required system packages
-[phases]
-setup = { nixPkgs = ["python310", "chromium", "chromedriver"] }
-install = "pip install -r requirements.txt"
+[phases.install]
+cmds = ["pip install -r requirements.txt"]
 
-# Start command
+[phases.build]
+cmds = ["pip install --upgrade pip"]
+
 [start]
-cmd = "python -m uvicorn main:app --host 0.0.0.0 --port $PORT"
+cmd = "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"
 
-# Basic environment variables
 [variables]
 PYTHONUNBUFFERED = "1"
 CHROME_BIN = "/usr/bin/chromium"

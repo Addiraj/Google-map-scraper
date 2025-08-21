@@ -1,16 +1,16 @@
-# Tell Nixpacks to use the Python provider.
+# Python provider with Chrome setup
 providers = ["python"]
 
-# Define the phases of the build process.
+# Setup phase - install required system packages
 [phases]
+setup = { nixPkgs = ["python310", "chromium", "chromedriver"] }
+install = "pip install -r requirements.txt"
 
-# The 'setup' phase where we install system packages.
-# We are being more explicit and using 'chromium' which is more reliable.
-setup = { nixPkgs = ["python310", "gcc", "chromium"] }
-
-# The 'install' phase for language-specific dependencies.
-install = { cmd = "pip install -r requirements.txt" }
-
-# The 'start' phase defines how to run the application.
+# Start command
 [start]
-cmd = "uvicorn main:app --host 0.0.0.0 --port $PORT"
+cmd = "python -m uvicorn main:app --host 0.0.0.0 --port $PORT"
+
+# Basic environment variables
+[variables]
+PYTHONUNBUFFERED = "1"
+CHROME_BIN = "/usr/bin/chromium"

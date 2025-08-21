@@ -10,8 +10,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
 from lxml import html
-from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
+import pandas as pd
 
 class AdvancedContactExtractor:
     def __init__(self, search_query, max_results=20, visit_websites=True):
@@ -20,7 +19,6 @@ class AdvancedContactExtractor:
         self.visit_websites = visit_websites
         self.extracted_count = 0
         self.contacts_found = 0
-        self.duration = None
 
         # Enhanced regex patterns for better contact extraction
         self.email_patterns = [
@@ -36,30 +34,41 @@ class AdvancedContactExtractor:
             re.compile(r'tel[:\s]*(\+?1?[-.\s]?\(?[0-9]{3}\)?[-.\s]?[0-9]{3}[-.\s]?[0-9]{4})', re.IGNORECASE),
         ]
 
-        # Setup browser only - removed database setup
+        # Setup browser
         self.setup_browser()
 
     def setup_browser(self):
-        """Setup Chrome browser with optimized settings for Railway deployment"""
+        """Setup Chrome browser with optimized settings for large datasets"""
         try:
             self.chrome_options = Options()
             self.chrome_options.add_argument("--headless")
-            self.chrome_options.add_argument("--start-maximized")
             self.chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+            self.chrome_options.add_argument("--disable-images")  # Speed up loading
+            self.chrome_options.add_argument("--disable-javascript")  # Speed up loading
             self.chrome_options.add_argument("--no-sandbox")
             self.chrome_options.add_argument("--disable-dev-shm-usage")
             self.chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
             self.chrome_options.add_experimental_option('useAutomationExtension', False)
+            self.chrome_options.binary_location = "/usr/bin/google-chrome"
 
-            # Initialize driver for Railway environment
-            service = Service(executable_path="/usr/bin/chromedriver")
-            self.driver = webdriver.Chrome(service=service, options=self.chrome_options)
-
+            self.driver = webdriver.Chrome(options=self.chrome_options)
             self.driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
             self.wait = WebDriverWait(self.driver, 10)
 
+            print("✓ Browser setup completed")
+
         except Exception as e:
-            raise Exception(f"Browser setup error: {e}")
+            print(f"Browser setup error: {e}")
+
+    def extract_digit_only_numbers(data_list):
+        results = []
+        for record in data_list:
+            for item in record:
+                text = item.strip()
+                cleaned = text.replace(" ", "").replace("-", "").replace("+", "")
+                if cleaned.isdigit() and len(cleaned) >= 6:
+                    results.append(text)
+        return results
 
     def extract_contacts_from_text(self, text):
         """Enhanced contact extraction from text using multiple patterns"""
@@ -88,29 +97,9 @@ class AdvancedContactExtractor:
                     if len(clean_phone) >= 10:
                         phones.add(match)
 
-        # Clean and validate emails
-        valid_emails = []
-        for email in emails:
-            email = email.strip().lower()
-            if '@' in email and '.' in email and len(email) > 5:
-                if not any(domain in email for domain in ['noreply', 'donotreply', 'no-reply']):
-                    valid_emails.append(email)
-
-        # Clean and validate phones
-        valid_phones = []
-        for phone in phones:
-            clean_phone = re.sub(r'[^\d+]', '', phone)
-            if len(clean_phone) >= 10 and len(clean_phone) <= 15:
-                if len(clean_phone) == 10:
-                    formatted = f"({clean_phone[:3]}) {clean_phone[3:6]}-{clean_phone[6:]}"
-                    valid_phones.append(formatted)
-                elif len(clean_phone) == 11 and clean_phone.startswith('1'):
-                    formatted = f"({clean_phone[1:4]}) {clean_phone[4:7]}-{clean_phone[7:]}"
-                    valid_phones.append(formatted)
-
         return {
-            'emails': list(set(valid_emails))[:3],
-            'phones': list(set(valid_phones))[:3]
+            'emails': list(set(emails))[:3],
+            'phones': list(set(phones))[:3]
         }
 
     def search_google_maps(self):
@@ -118,22 +107,16 @@ class AdvancedContactExtractor:
         try:
             self.chrome_options.add_argument("--enable-javascript")
             search_url = f"https://www.google.com/maps/search/{self.search_query.replace(' ', '+')}"
+            print(f"Searching: {search_url}")
+
             self.driver.get(search_url)
             time.sleep(5)
-
-            try:
-                accept_button = self.wait.until(
-                    EC.element_to_be_clickable((By.XPATH, "//button/span[contains(text(),'Accept all')]"))
-                )
-                accept_button.click()
-                time.sleep(5)
-            except TimeoutException:
-                pass
 
             return True
 
         except Exception as e:
-            raise Exception(f"Search error: {e}")
+            print(f"Search error: {e}")
+            return False
 
     def get_business_links_advanced(self):
         """Advanced business link extraction with better pagination"""
@@ -154,6 +137,7 @@ class AdvancedContactExtractor:
                     continue
 
             if not scrollable_div:
+                print("Could not find scrollable panel")
                 return []
 
             all_links = set()
@@ -184,23 +168,18 @@ class AdvancedContactExtractor:
                 self.driver.execute_script("arguments[0].scrollTop = arguments[0].scrollHeight", scrollable_div)
                 time.sleep(random.uniform(2, 4))
 
-                if any(indicator in page_source for indicator in [
-                    "You've reached the end of the list",
-                    "No more results",
-                    "That's all the results"
-                ]):
-                    break
-
                 scroll_attempts += 1
 
             return list(all_links)[:self.max_results]
 
         except Exception as e:
-            raise Exception(f"Pagination error: {e}")
+            print(f"Pagination error: {e}")
+            return []
 
     def extract_business_contacts(self, business_url):
         """Extract detailed contact information from business page"""
         try:
+            print(f"Extracting: {business_url}")
             self.driver.get(business_url)
             self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
             time.sleep(random.uniform(3, 6))
@@ -212,7 +191,6 @@ class AdvancedContactExtractor:
                 'additional_contacts': ''
             }
 
-            # Extract basic business info
             try:
                 name_element = self.driver.find_element(By.CSS_SELECTOR, "h1")
                 data['business_name'] = name_element.text.strip()
@@ -220,11 +198,7 @@ class AdvancedContactExtractor:
                 data['business_name'] = "Unknown Business"
 
             try:
-                scrollable_div = self.driver.find_element(By.XPATH,
-                                                         '//div[@role="main"]//div[contains(@class, "m6QErb")]')
-                self.driver.execute_script("arguments[0].scrollTop = arguments[0].scrollHeight", scrollable_div)
-                time.sleep(2)
-                address_element = self.wait.until(
+                address_element = WebDriverWait(self.driver, 10).until(
                     EC.visibility_of_element_located((By.XPATH, "//button[@data-item-id='address']"))
                 )
                 data['address'] = address_element.text.strip()
@@ -250,7 +224,6 @@ class AdvancedContactExtractor:
             except:
                 data['category'] = "Unknown Category"
 
-            # Extract website
             try:
                 website_element = self.driver.find_element(By.CSS_SELECTOR, "[data-item-id='authority']")
                 data['website'] = website_element.get_attribute('href')
@@ -258,29 +231,33 @@ class AdvancedContactExtractor:
                 data['website'] = None
 
             try:
-                elements = self.driver.find_elements(By.XPATH,
-                                                   "//div[@class='rogA2c ']/div[@class='Io6YTe fontBodyMedium kR99db fdkmkc ']")
-                data['mixed_data'] = json.dumps([el.text.strip() for el in elements])
+                data['base_url'] = business_url
             except:
-                data['mixed_data'] = None
+                data['base_url'] = None
 
-            # Extract phone numbers
-            def is_phone_number(text):
-                cleaned = text.replace(" ", "").replace("-", "").replace("+", "")
-                return cleaned.isdigit() and len(cleaned) >= 6
+            try:
+                elements = self.driver.find_elements(By.XPATH,
+                                                     "//div[@class='rogA2c ']/div[@class='Io6YTe fontBodyMedium kR99db fdkmkc ']")
+                data['mixed_data'] = json.dumps([el.text.strip() for el in elements])
 
-            data['phone_no'] = str(json.dumps([
-                el.text.strip()
-                for el in elements
-                if is_phone_number(el.text.strip())
-            ]))
+                def is_phone_number(text):
+                    cleaned = text.replace(" ", "").replace("-", "").replace("+", "")
+                    return cleaned.isdigit() and len(cleaned) >= 6
+
+                data['phone_no'] = json.dumps([
+                    el.text.strip()
+                    for el in elements
+                    if is_phone_number(el.text.strip())
+                ])
+            except:
+                data['mixed_data'] = "[]"
+                data['phone_no'] = "[]"
 
             # Extract contacts from Google Maps page
             page_contacts = self.extract_contacts_from_text(self.driver.page_source)
             data['primary_email'] = page_contacts['emails'][0] if page_contacts['emails'] else None
             data['secondary_email'] = page_contacts['emails'][1] if len(page_contacts['emails']) > 1 else None
 
-            # Visit website for additional contacts if enabled
             if self.visit_websites and data['website']:
                 website_contacts = self.extract_from_website(data['website'])
                 if website_contacts:
@@ -298,9 +275,6 @@ class AdvancedContactExtractor:
                     }
                     data['additional_contacts'] = json.dumps(additional)
 
-            if data.get('primary_email') or data.get('secondary_email'):
-                self.contacts_found += sum([1 for x in [data['primary_email'], data['secondary_email']] if x])
-
             return data
 
         except Exception as e:
@@ -310,14 +284,14 @@ class AdvancedContactExtractor:
     def extract_from_website(self, website_url):
         """Extract additional contacts from business website"""
         try:
+            print(f"Visiting website: {website_url}")
             self.driver.execute_script(f"window.open('{website_url}', '_blank');")
             self.driver.switch_to.window(self.driver.window_handles[-1])
             time.sleep(10)
 
             website_contacts = self.extract_contacts_from_text(self.driver.page_source)
-
             contact_links = self.driver.find_elements(By.XPATH,
-                                                    "//a[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'contact')]")
+                                                      "//a[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'contact')]")
 
             if contact_links and len(contact_links) > 0:
                 try:
@@ -334,38 +308,42 @@ class AdvancedContactExtractor:
             return website_contacts
 
         except Exception as e:
+            print(f"Website extraction error: {e}")
             if len(self.driver.window_handles) > 1:
                 self.driver.close()
                 self.driver.switch_to.window(self.driver.window_handles[0])
             return {'emails': [], 'phones': []}
 
     def run_extraction(self):
-        """Main extraction process optimized for API usage"""
+        """Main extraction process optimized for large datasets and contact extraction"""
         start_time = datetime.now()
+        results = []
 
         try:
+            print(f"STARTING ADVANCED CONTACT EXTRACTION")
+            print(f"Search Query: {self.search_query}")
+            print(f"Target: {self.max_results} businesses")
+
             if not self.search_google_maps():
-                return False
+                return []
 
             business_links = self.get_business_links_advanced()
             if not business_links:
-                return False
+                return []
 
             for i, link in enumerate(business_links, 1):
                 business_data = self.extract_business_contacts(link)
                 if business_data:
-                    # Instead of saving to database, we'll use the callback
-                    self.save_business_data(business_data)
                     self.extracted_count += 1
+                    results.append(business_data)
 
                 time.sleep(random.uniform(2, 5))
 
-            end_time = datetime.now()
-            self.duration = end_time - start_time
-            return True
+            return results
 
         except Exception as e:
-            raise Exception(f"Extraction error: {e}")
+            print(f"Extraction error: {e}")
+            return []
         finally:
             self.cleanup()
 
@@ -374,5 +352,5 @@ class AdvancedContactExtractor:
         try:
             if hasattr(self, 'driver'):
                 self.driver.quit()
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Cleanup error: {e}")

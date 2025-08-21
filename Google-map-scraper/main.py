@@ -61,25 +61,35 @@ class AdvancedContactExtractor:
         self.phone_patterns = [re.compile(r'\+?1?[-.\s]?\(?([0-9]{3})\)?[-.\s]?([0-9]{3})[-.\s]?([0-9]{4})')]
 
     def setup_browser(self):
-        """Sets up a headless Chrome browser required for server environments."""
+        """Sets up a headless Chrome browser with anti-detection features."""
         try:
             self.chrome_options = Options()
-            # These 3 arguments are CRITICAL for running in Railway/Docker
+            
+            # Standard headless arguments
             self.chrome_options.add_argument("--headless")
             self.chrome_options.add_argument("--no-sandbox")
             self.chrome_options.add_argument("--disable-dev-shm-usage")
+            self.chrome_options.add_argument("--window-size=1920,1080") # Set a common window size
 
-            self.chrome_options.add_argument("--start-maximized")
+            # --- Anti-detection Arguments ---
+            # This is the most important part. We are making the browser look like a real one.
+            user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"
+            self.chrome_options.add_argument(f'user-agent={user_agent}')
+            
             self.chrome_options.add_argument("--disable-blink-features=AutomationControlled")
             self.chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
-
+            self.chrome_options.add_experimental_option('useAutomationExtension', False)
+            
             from selenium.webdriver.chrome.service import Service
             from webdriver_manager.chrome import ChromeDriverManager
+            
+            self.driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=self.chrome_options)
+            
+            # This script hides the "navigator.webdriver" property that websites use to detect Selenium
+            self.driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
-            self.driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()),
-                                           options=self.chrome_options)
-            self.wait = WebDriverWait(self.driver, 10)
-            print("Headless browser setup completed.")
+            self.wait = WebDriverWait(self.driver, 15) # Increase wait time for more stability
+            print("Headless browser with anti-detection setup completed.")
         except Exception as e:
             print(f"Browser setup error: {e}")
             raise
@@ -522,4 +532,5 @@ async def search_businesses(request: SearchRequest):
 
 @app.get("/")
 def read_root():
+
     return {"status": "Google Maps Scraper API is running", "docs_url": "/docs"}

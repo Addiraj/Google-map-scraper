@@ -1,15 +1,19 @@
 [phases.setup]
 nixPkgs = [
+    "python3",
+    "python3-pip",
     "chromium",
     "chromedriver"
 ]
 
 [phases.install]
 aptPkgs = [
+    "python3",
+    "python3-pip",
     "chromium-browser"
 ]
 cmds = [
-    "python -m pip install --upgrade pip",
+    "python3 -m pip install --upgrade pip",
     "pip install -r requirements.txt"
 ]
 
@@ -19,3 +23,4 @@ cmd = "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"
 [env]
 PYTHONUNBUFFERED = "1"
 CHROME_BIN = "/usr/bin/chromium"
+PATH = "/usr/local/bin:/usr/bin:/bin"

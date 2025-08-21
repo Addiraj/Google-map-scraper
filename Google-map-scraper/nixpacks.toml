@@ -1,16 +1,16 @@
-# Tell Nixpacks which providers (languages) to use.
+# Tell Nixpacks to use the Python provider.
 providers = ["python"]
 
 # Define the phases of the build process.
 [phases]
 
-# The 'setup' phase is where we install system packages.
-setup = { nixPkgs = ["...", "google-chrome-stable"] }
+# The 'setup' phase where we install system packages.
+# We are being more explicit and using 'chromium' which is more reliable.
+setup = { nixPkgs = ["python310", "gcc", "chromium"] }
 
-# The 'install' phase is for language-specific dependencies.
+# The 'install' phase for language-specific dependencies.
 install = { cmd = "pip install -r requirements.txt" }
 
 # The 'start' phase defines how to run the application.
-# This overrides the Procfile, making it the single source of truth.
 [start]
 cmd = "uvicorn main:app --host 0.0.0.0 --port $PORT"

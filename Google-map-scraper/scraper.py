@@ -19,6 +19,7 @@ class AdvancedContactExtractor:
         self.visit_websites = visit_websites
         self.extracted_count = 0
         self.contacts_found = 0
+        self.results = []
 
         # Enhanced regex patterns for better contact extraction
         self.email_patterns = [
@@ -43,15 +44,24 @@ class AdvancedContactExtractor:
             self.chrome_options = Options()
             self.chrome_options.add_argument("--headless")
             self.chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-            self.chrome_options.add_argument("--disable-images")  # Speed up loading
-            self.chrome_options.add_argument("--disable-javascript")  # Speed up loading
-            self.chrome_options.add_argument("--no-sandbox")
             self.chrome_options.add_argument("--disable-dev-shm-usage")
+            self.chrome_options.add_argument("--no-sandbox")
             self.chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
             self.chrome_options.add_experimental_option('useAutomationExtension', False)
-            self.chrome_options.binary_location = "/usr/bin/google-chrome"
 
-            self.driver = webdriver.Chrome(options=self.chrome_options)
+            # Set Chrome binary location if specified in environment
+            import os
+            if os.environ.get("CHROME_BIN"):
+                self.chrome_options.binary_location = os.environ["CHROME_BIN"]
+
+            from selenium.webdriver.chrome.service import Service
+            from webdriver_manager.chrome import ChromeDriverManager
+
+            self.driver = webdriver.Chrome(
+                service=Service(ChromeDriverManager().install()),
+                options=self.chrome_options
+            )
+
             self.driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
             self.wait = WebDriverWait(self.driver, 10)
 
@@ -59,16 +69,7 @@ class AdvancedContactExtractor:
 
         except Exception as e:
             print(f"Browser setup error: {e}")
-
-    def extract_digit_only_numbers(data_list):
-        results = []
-        for record in data_list:
-            for item in record:
-                text = item.strip()
-                cleaned = text.replace(" ", "").replace("-", "").replace("+", "")
-                if cleaned.isdigit() and len(cleaned) >= 6:
-                    results.append(text)
-        return results
+            raise
 
     def extract_contacts_from_text(self, text):
         """Enhanced contact extraction from text using multiple patterns"""
@@ -97,20 +98,49 @@ class AdvancedContactExtractor:
                     if len(clean_phone) >= 10:
                         phones.add(match)
 
+        # Clean and validate emails
+        valid_emails = []
+        for email in emails:
+            email = email.strip().lower()
+            if '@' in email and '.' in email and len(email) > 5:
+                if not any(domain in email for domain in ['noreply', 'donotreply', 'no-reply']):
+                    valid_emails.append(email)
+
+        # Clean and validate phones
+        valid_phones = []
+        for phone in phones:
+            clean_phone = re.sub(r'[^\d+]', '', phone)
+            if len(clean_phone) >= 10 and len(clean_phone) <= 15:
+                if len(clean_phone) == 10:
+                    formatted = f"({clean_phone[:3]}) {clean_phone[3:6]}-{clean_phone[6:]}"
+                    valid_phones.append(formatted)
+                elif len(clean_phone) == 11 and clean_phone.startswith('1'):
+                    formatted = f"({clean_phone[1:4]}) {clean_phone[4:7]}-{clean_phone[7:]}"
+                    valid_phones.append(formatted)
+
         return {
-            'emails': list(set(emails))[:3],
-            'phones': list(set(phones))[:3]
+            'emails': list(set(valid_emails))[:3],
+            'phones': list(set(valid_phones))[:3]
         }
 
     def search_google_maps(self):
         """Navigate to Google Maps and perform search"""
         try:
-            self.chrome_options.add_argument("--enable-javascript")
             search_url = f"https://www.google.com/maps/search/{self.search_query.replace(' ', '+')}"
             print(f"Searching: {search_url}")
 
             self.driver.get(search_url)
             time.sleep(5)
+
+            # Handle cookie consent if present
+            try:
+                accept_button = self.wait.until(
+                    EC.element_to_be_clickable((By.XPATH, "//button/span[contains(text(),'Accept all')]"))
+                )
+                accept_button.click()
+                time.sleep(5)
+            except TimeoutException:
+                print("No cookie consent found")
 
             return True
 
@@ -168,6 +198,13 @@ class AdvancedContactExtractor:
                 self.driver.execute_script("arguments[0].scrollTop = arguments[0].scrollHeight", scrollable_div)
                 time.sleep(random.uniform(2, 4))
 
+                if any(indicator in page_source for indicator in [
+                    "You've reached the end of the list",
+                    "No more results",
+                    "That's all the results"
+                ]):
+                    break
+
                 scroll_attempts += 1
 
             return list(all_links)[:self.max_results]
@@ -179,7 +216,6 @@ class AdvancedContactExtractor:
     def extract_business_contacts(self, business_url):
         """Extract detailed contact information from business page"""
         try:
-            print(f"Extracting: {business_url}")
             self.driver.get(business_url)
             self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
             time.sleep(random.uniform(3, 6))
@@ -188,9 +224,10 @@ class AdvancedContactExtractor:
                 'google_maps_url': business_url,
                 'search_query': self.search_query,
                 'website_visited': False,
-                'additional_contacts': ''
+                'additional_contacts': {}
             }
 
+            # Extract basic business info
             try:
                 name_element = self.driver.find_element(By.CSS_SELECTOR, "h1")
                 data['business_name'] = name_element.text.strip()
@@ -198,6 +235,10 @@ class AdvancedContactExtractor:
                 data['business_name'] = "Unknown Business"
 
             try:
+                scrollable_div = self.driver.find_element(By.XPATH,
+                                                          '//div[@role="main"]//div[contains(@class, "m6QErb")]')
+                self.driver.execute_script("arguments[0].scrollTop = arguments[0].scrollHeight", scrollable_div)
+                time.sleep(2)
                 address_element = WebDriverWait(self.driver, 10).until(
                     EC.visibility_of_element_located((By.XPATH, "//button[@data-item-id='address']"))
                 )
@@ -231,55 +272,46 @@ class AdvancedContactExtractor:
                 data['website'] = None
 
             try:
-                data['base_url'] = business_url
-            except:
-                data['base_url'] = None
-
-            try:
                 elements = self.driver.find_elements(By.XPATH,
                                                      "//div[@class='rogA2c ']/div[@class='Io6YTe fontBodyMedium kR99db fdkmkc ']")
-                data['mixed_data'] = json.dumps([el.text.strip() for el in elements])
-
-                def is_phone_number(text):
-                    cleaned = text.replace(" ", "").replace("-", "").replace("+", "")
-                    return cleaned.isdigit() and len(cleaned) >= 6
-
-                data['phone_no'] = json.dumps([
-                    el.text.strip()
-                    for el in elements
-                    if is_phone_number(el.text.strip())
-                ])
+                data['phone_no'] = next((el.text.strip() for el in elements if self.is_phone_number(el.text.strip())), None)
             except:
-                data['mixed_data'] = "[]"
-                data['phone_no'] = "[]"
+                data['phone_no'] = None
 
             # Extract contacts from Google Maps page
             page_contacts = self.extract_contacts_from_text(self.driver.page_source)
             data['primary_email'] = page_contacts['emails'][0] if page_contacts['emails'] else None
             data['secondary_email'] = page_contacts['emails'][1] if len(page_contacts['emails']) > 1 else None
 
+            # Visit website for additional contacts
             if self.visit_websites and data['website']:
                 website_contacts = self.extract_from_website(data['website'])
                 if website_contacts:
                     data['website_visited'] = True
                     all_emails = page_contacts['emails'] + website_contacts['emails']
                     all_phones = page_contacts['phones'] + website_contacts['phones']
+
                     unique_emails = list(dict.fromkeys(all_emails))[:3]
                     unique_phones = list(dict.fromkeys(all_phones))[:3]
+
                     data['primary_email'] = unique_emails[0] if unique_emails else None
                     data['secondary_email'] = unique_emails[1] if len(unique_emails) > 1 else None
-                    additional = {
+
+                    data['additional_contacts'] = {
                         'extra_emails': unique_emails[2:],
                         'extra_phones': unique_phones[2:],
                         'website_source': True
                     }
-                    data['additional_contacts'] = json.dumps(additional)
 
             return data
 
         except Exception as e:
             print(f"Error extracting business: {e}")
             return None
+
+    def is_phone_number(self, text):
+        cleaned = text.replace(" ", "").replace("-", "").replace("+", "")
+        return cleaned.isdigit() and len(cleaned) >= 6
 
     def extract_from_website(self, website_url):
         """Extract additional contacts from business website"""
@@ -290,8 +322,10 @@ class AdvancedContactExtractor:
             time.sleep(10)
 
             website_contacts = self.extract_contacts_from_text(self.driver.page_source)
+
+            # Try to find and visit contact page
             contact_links = self.driver.find_elements(By.XPATH,
-                                                      "//a[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'contact')]")
+                "//a[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'contact')]")
 
             if contact_links and len(contact_links) > 0:
                 try:
@@ -316,14 +350,7 @@ class AdvancedContactExtractor:
 
     def run_extraction(self):
         """Main extraction process optimized for large datasets and contact extraction"""
-        start_time = datetime.now()
-        results = []
-
         try:
-            print(f"STARTING ADVANCED CONTACT EXTRACTION")
-            print(f"Search Query: {self.search_query}")
-            print(f"Target: {self.max_results} businesses")
-
             if not self.search_google_maps():
                 return []
 
@@ -331,11 +358,12 @@ class AdvancedContactExtractor:
             if not business_links:
                 return []
 
+            results = []
             for i, link in enumerate(business_links, 1):
                 business_data = self.extract_business_contacts(link)
                 if business_data:
-                    self.extracted_count += 1
                     results.append(business_data)
+                    self.extracted_count += 1
 
                 time.sleep(random.uniform(2, 5))
 

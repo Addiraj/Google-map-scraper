@@ -1,9 +1,14 @@
-from fastapi import FastAPI, BackgroundTasks
+from fastapi import FastAPI, BackgroundTasks, HTTPException
 from pydantic import BaseModel
 from typing import Optional, List
 import json
 from datetime import datetime
+import os
 from scraper import AdvancedContactExtractor
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
 
 app = FastAPI(title="Google Maps Business Scraper API")
 
@@ -25,8 +30,44 @@ class BusinessData(BaseModel):
     additional_contacts: Optional[dict]
 
 @app.get("/")
-async def root():
-    return {"status": "active", "message": "Google Maps Business Scraper API is running"}
+async def health_check():
+    return {
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "service": "Google Maps Scraper API"
+    }
+
+def get_chrome_options():
+    chrome_options = Options()
+    chrome_options.add_argument("--headless")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--disable-gpu")
+    chrome_options.add_argument("--disable-software-rasterizer")
+
+    if os.environ.get("CHROME_BIN"):
+        chrome_options.binary_location = os.environ["CHROME_BIN"]
+
+    return chrome_options
+
+@app.get("/test-chrome")
+async def test_chrome():
+    try:
+        chrome_options = get_chrome_options()
+        service = Service(ChromeDriverManager().install())
+        driver = webdriver.Chrome(service=service, options=chrome_options)
+
+        driver.get("https://www.google.com")
+        title = driver.title
+        driver.quit()
+
+        return {
+            "status": "success",
+            "chrome_version": driver.capabilities["browserVersion"],
+            "page_title": title
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Chrome test failed: {str(e)}")
 
 @app.post("/scrape")
 async def scrape_businesses(request: SearchRequest):
@@ -59,7 +100,15 @@ async def scrape_businesses(request: SearchRequest):
                 }
                 formatted_results.append(formatted_data)
 
-        return formatted_results
+        return {
+            "status": "success",
+            "message": f"Found {len(formatted_results)} businesses",
+            "data": formatted_results
+        }
 
     except Exception as e:
-        return {"error": str(e)}
+        raise HTTPException(status_code=500, detail=str(e))
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)

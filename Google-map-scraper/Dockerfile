@@ -11,31 +11,36 @@ RUN apt-get update && apt-get install -y \
     && apt-get update \
     && apt-get install -y \
     google-chrome-stable \
-    chromium \
-    chromium-driver \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
+
+# Install Chrome WebDriver
+RUN CHROME_DRIVER_VERSION=`curl -sS https://chromedriver.storage.googleapis.com/LATEST_RELEASE` && \
+    wget -q -O /tmp/chromedriver.zip https://chromedriver.storage.googleapis.com/$CHROME_DRIVER_VERSION/chromedriver_linux64.zip && \
+    unzip /tmp/chromedriver.zip -d /usr/local/bin/ && \
+    rm /tmp/chromedriver.zip && \
+    chmod +x /usr/local/bin/chromedriver
 
 # Set working directory
 WORKDIR /app
 
-# Copy requirements first for better caching
-COPY requirements.txt .
+# Create and activate virtual environment
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
 
 # Install Python dependencies
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the application
+# Copy application code
 COPY . .
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
 ENV CHROME_BIN=/usr/bin/google-chrome
-ENV PATH="/usr/local/bin:/usr/bin:/bin"
-ENV PORT=8000
 
-# Make port 8000 available
-EXPOSE ${PORT}
+# Expose port
+EXPOSE 8000
 
-# Start the FastAPI app
+# Command to run the application
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
